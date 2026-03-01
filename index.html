@@ -193,13 +193,10 @@
 
         /* --- PARAMETRIC CROSSHAIR ARCHITECTURE --- */
         #crosshair {
-            /* Reticle Geometric Control Panel - Adjust these to taste */
             --circle-size: 46px;
-            --circle-stroke: 3px; /* Slightly thicker to show off the gradient */
+            --circle-stroke: 3px; 
             --cross-size: 16px;
             --cross-stroke: 1px;
-            
-            /* Dynamic Cross State (Managed by JavaScript) */
             --cross-color: #ffffff; 
             
             display: none;
@@ -212,45 +209,20 @@
             will-change: transform;
         }
 
-        /* Dynamic Inversion State - Only targets the inner cross */
         #crosshair.invert-dark {
-            --cross-color: #1c1c1e; /* Deep grey/black for light backgrounds */
+            --cross-color: #1c1c1e; 
         }
 
-        /* The Angular Gradient Ring */
         .crosshair-ring {
             position: absolute;
             inset: 0; 
             border-radius: 50%;
-            
-            /* The Full-Spectrum Conic Gradient */
-            background: conic-gradient(
-                #ff0000, 
-                #ffff00, 
-                #00ff00, 
-                #00ffff, 
-                #0000ff, 
-                #ff00ff, 
-                #ff0000 /* Closes the loop */
-            );
-            
-            /* Mathematical mask to punch out the transparent center */
-            -webkit-mask: radial-gradient(
-                circle closest-side, 
-                transparent calc(100% - var(--circle-stroke) - 0.5px), 
-                black calc(100% - var(--circle-stroke) + 0.5px)
-            );
-            mask: radial-gradient(
-                circle closest-side, 
-                transparent calc(100% - var(--circle-stroke) - 0.5px), 
-                black calc(100% - var(--circle-stroke) + 0.5px)
-            );
-            
-            /* Subtle shadow to separate the ring from the image beneath */
+            background: conic-gradient(#ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+            -webkit-mask: radial-gradient(circle closest-side, transparent calc(100% - var(--circle-stroke) - 0.5px), black calc(100% - var(--circle-stroke) + 0.5px));
+            mask: radial-gradient(circle closest-side, transparent calc(100% - var(--circle-stroke) - 0.5px), black calc(100% - var(--circle-stroke) + 0.5px));
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
         }
 
-        /* Core structure for the intersecting lines */
         #crosshair::before,
         #crosshair::after {
             content: '';
@@ -259,20 +231,11 @@
             background-color: var(--cross-color);
             transform: translate(-50%, -50%);
             transition: background-color 0.15s ease-out;
-            box-shadow: 0 0 2px rgba(0,0,0,0.3); /* Ensures cross lines pop slightly */
+            box-shadow: 0 0 2px rgba(0,0,0,0.3); 
         }
 
-        /* Horizontal Axis */
-        #crosshair::before {
-            width: var(--cross-size);
-            height: var(--cross-stroke);
-        }
-
-        /* Vertical Axis */
-        #crosshair::after {
-            width: var(--cross-stroke);
-            height: var(--cross-size);
-        }
+        #crosshair::before { width: var(--cross-size); height: var(--cross-stroke); }
+        #crosshair::after { width: var(--cross-stroke); height: var(--cross-size); }
 
     </style>
 </head>
@@ -331,14 +294,16 @@
         const btnText = document.getElementById('btnText');
 
         const MAX_IMG_DIMENSION = 1600; 
-        
-        // Offset variable: shifts reticle visually above physical finger placement
         const TOUCH_OFFSET_Y = -60; 
 
         let cachedImageData = null;
         let currentHex = "";
         let animationFrameId = null;
         let isDragging = false;
+        
+        // Cache variables to prevent layout thrashing and unnecessary DOM updates
+        let canvasMetrics = null;
+        let lastR = null, lastG = null, lastB = null;
 
         function handlePlaceholderTouchStart() { placeholderContent.classList.add('pressed'); }
         function handlePlaceholderTouchEnd() { placeholderContent.classList.remove('pressed'); }
@@ -350,7 +315,30 @@
         });
 
         placeholderContent.addEventListener('click', () => imageLoader.click());
+        
+        // Fix to allow selecting the identical file multiple times sequentially
+        imageLoader.addEventListener('click', function() { this.value = null; });
         imageLoader.addEventListener('change', handleImage, false);
+
+        // Pre-compute canvas boundary mathematics to save compute load during touch events
+        function updateCanvasMetrics() {
+            if (mainCanvas.width === 0) return;
+            const rect = mainCanvas.getBoundingClientRect();
+            const scale = Math.min(rect.width / mainCanvas.width, rect.height / mainCanvas.height);
+            
+            const renderedWidth = mainCanvas.width * scale;
+            const renderedHeight = mainCanvas.height * scale;
+            
+            canvasMetrics = {
+                left: rect.left,
+                top: rect.top,
+                scale: scale,
+                offsetX: (rect.width - renderedWidth) / 2,
+                offsetY: (rect.height - renderedHeight) / 2
+            };
+        }
+
+        window.addEventListener('resize', updateCanvasMetrics);
 
         function handleImage(e) {
             if (!e.target.files[0]) return;
@@ -377,7 +365,11 @@
                     mainCtx.drawImage(img, 0, 0, width, height);
                     
                     cachedImageData = mainCtx.getImageData(0, 0, width, height).data;
+                    updateCanvasMetrics(); // Initialize metrics
                     
+                    // Reset diffing state for the new image
+                    lastR = null; lastG = null; lastB = null;
+
                     mainCanvas.classList.add('loaded');
                     btnText.textContent = "Select New Photo";
                 }
@@ -387,7 +379,7 @@
         }
 
         function handleInteraction(e) {
-            if (!cachedImageData || mainCanvas.width === 0) return;
+            if (!cachedImageData || !canvasMetrics) return;
 
             const clientX = e.changedTouches ? e.changedTouches[0].clientX : e.clientX;
             const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
@@ -404,23 +396,25 @@
         }
 
         function processCoordinates(targetX, targetY) {
-            const rect = mainCanvas.getBoundingClientRect();
-            const scale = Math.min(rect.width / mainCanvas.width, rect.height / mainCanvas.height);
-            
-            const renderedWidth = mainCanvas.width * scale;
-            const renderedHeight = mainCanvas.height * scale;
-            
-            const offsetX = (rect.width - renderedWidth) / 2;
-            const offsetY = (rect.height - renderedHeight) / 2;
+            // Establish visual boundaries based on cached spatial metrics
+            const minX = canvasMetrics.left + canvasMetrics.offsetX;
+            const maxX = minX + (mainCanvas.width * canvasMetrics.scale);
+            const minY = canvasMetrics.top + canvasMetrics.offsetY;
+            const maxY = minY + (mainCanvas.height * canvasMetrics.scale);
 
-            const x = Math.floor((targetX - rect.left - offsetX) / scale);
-            const y = Math.floor((targetY - rect.top - offsetY) / scale);
+            // Clamp coordinates so the reticle binds strictly to the edges without faulting
+            const clampedX = Math.max(minX, Math.min(targetX, maxX - 1));
+            const clampedY = Math.max(minY, Math.min(targetY, maxY - 1));
 
+            const x = Math.floor((clampedX - minX) / canvasMetrics.scale);
+            const y = Math.floor((clampedY - minY) / canvasMetrics.scale);
+
+            // Safety break (clamping generally nullifies the need for this, but kept for absolute safety)
             if (x < 0 || y < 0 || x >= mainCanvas.width || y >= mainCanvas.height) return;
 
-            // GPU Accelerated Rendering
+            // Direct transform injection using specific offset (23px represents half of --circle-size)
             crosshair.style.display = 'block';
-            crosshair.style.transform = `translate3d(calc(${targetX}px - 50%), calc(${targetY}px - 50%), 0)`;
+            crosshair.style.transform = `translate3d(${clampedX - 23}px, ${clampedY - 23}px, 0)`;
 
             const index = (y * mainCanvas.width + x) * 4;
             const r = cachedImageData[index];
@@ -431,14 +425,16 @@
         }
 
         function updateDisplay(r, g, b) {
-            currentHex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
-            const rgbString = `${r}, ${g}, ${b}`;
+            // DOM manipulation diffing: exit early if the color vector remains identical
+            if (r === lastR && g === lastG && b === lastB) return;
+            lastR = r; lastG = g; lastB = b;
 
+            currentHex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+            
             hexDisplay.textContent = currentHex;
-            rgbDisplay.textContent = rgbString;
+            rgbDisplay.textContent = `${r}, ${g}, ${b}`;
             swatch.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
 
-            // Relative Luminance Calculation for dynamic cross inversion
             const luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
             
             if (luminance >= 128) {
